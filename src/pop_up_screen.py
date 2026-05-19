@@ -191,6 +191,23 @@ def main():
     if not player_name and session_context.get("riot_id"):
         player_name = session_context.get("riot_id", "").split("#", 1)[0]
 
+    # If no session context was loaded (empty dict), show popup to collect details
+    popup_used = False
+    if not session_context:
+        # Show the DualInputDialog (comboboxes) to capture player_name and game_name
+        root = tk.Tk()
+        root.withdraw()
+        dialog = DualInputDialog(root, title="Enter Player & Game Info")
+        player_name = getattr(dialog, "player_name", None)
+        game_name = getattr(dialog, "game_name", None)
+
+        if not player_name or not game_name:
+            print("POPUP_CANCELLED")
+            sys.exit(2)
+
+        popup_used = True
+        print("POPUP_SHOWN")
+
     # Load mapping early to allow a silent fallback when there is no session context.
     mapping = load_mapping()
 
