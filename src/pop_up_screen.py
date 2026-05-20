@@ -8,10 +8,10 @@ import sys
 import time
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from server.python_app.sftp_upload import upload_file_to_sftp
-
+from sftp_upload import upload_file_to_sftp
 
 # ------------------ Utility Functions ------------------
+
 
 def get_latest_file(path):
     files = glob.glob(os.path.join(path, "*.csv"))
@@ -29,41 +29,97 @@ def get_latest_video_any(path):
 
 
 def get_next_player_id(mapping):
-    existing_ids = [v for v in mapping.values() if v.startswith('P')]
+    """Generate the next available player ID like P028."""
+    existing_ids = [v for v in mapping.values() if v.startswith("P")]
     nums = [int(pid[1:]) for pid in existing_ids if pid[1:].isdigit()]
-    return f'P{max(nums, default=0) + 1:03d}'
+    next_num = max(nums, default=0) + 1
+    return f"P{next_num:03d}"
 
 
-def load_mapping(mapping_file='data/json/ign_mapping.json'):
+def load_mapping(mapping_file="data/json/ign_mapping.json"):
     if os.path.exists(mapping_file):
-        with open(mapping_file, 'r') as file:
+        with open(mapping_file, "r") as file:
             return json.load(file)
     return {}
 
 
-def save_mapping(mapping, mapping_file='data/json/ign_mapping.json'):
+def load_session_context(context_file="data/json/session_context.json"):
+    """Load latest session context saved by the Electron app (if available).
+
+    Tries a small list of candidate locations so the Electron app can write
+    session context in a few common places. Returns the parsed JSON or an
+    empty dict if none found.
+    """
+    candidates = [context_file]
+
+    # project root (parent of src)
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    candidates.append(
+        os.path.join(project_root, "data", "json", "session_context.json")
+    )
+    candidates.append(os.path.join(project_root, "session_context.json"))
+
+    # Documents/research_software (used elsewhere in the code for videos)
+    docs_path = os.path.join(
+        os.path.expanduser("~"),
+        "Documents",
+        "research_software",
+        "data",
+        "json",
+        "session_context.json",
+    )
+    candidates.append(docs_path)
+
+    for path in candidates:
+        try:
+            if os.path.exists(path):
+                with open(path, "r") as file:
+                    data = json.load(file)
+                    print(f"Loaded session context from: {path}")
+                    return data
+        except json.JSONDecodeError:
+            print(f"Warning: corrupted session context file at {path} → ignoring.")
+        except Exception as e:
+            print(f"Warning: failed to read session context at {path}: {e}")
+
+    print("No session context file found in candidates:")
+    for p in candidates:
+        print("  -", p)
+    return {}
+
+
+def normalize_game_name(game_name: str) -> str:
+    normalized = game_name.strip().lower()
+    if normalized in {"lol", "league", "league of legends", "league_of_legends"}:
+        return "league_of_legends"
+    if normalized in {"valorant", "val"}:
+        return "valorant"
+    return normalized
+
+
+def save_mapping(mapping, mapping_file="data/json/ign_mapping.json"):
     os.makedirs(os.path.dirname(mapping_file), exist_ok=True)
-    with open(mapping_file, 'w') as file:
+    with open(mapping_file, "w") as file:
         json.dump(mapping, file, indent=4)
 
 
-def load_daily_game_count(count_file='data/json/date_game_count.json'):
+def load_daily_game_count(count_file="data/json/date_game_count.json"):
     if os.path.exists(count_file):
         try:
-            with open(count_file, 'r') as file:
+            with open(count_file, "r") as file:
                 return json.load(file)
         except json.JSONDecodeError:
             return {}
     return {}
 
 
-def save_daily_game_count(data, count_file='data/json/date_game_count.json'):
+def save_daily_game_count(data, count_file="data/json/date_game_count.json"):
     os.makedirs(os.path.dirname(count_file), exist_ok=True)
-    with open(count_file, 'w') as file:
+    with open(count_file, "w") as file:
         json.dump(data, file, indent=4)
 
 
-def update_daily_game_count(game_name):
+def update_daily_game_count(game_name, count_file="data/json/date_game_count.json"):
     today = datetime.datetime.now().strftime("%d-%m-%Y")
     data = load_daily_game_count()
 
@@ -78,10 +134,12 @@ def get_ordinal(n):
     return f"{n}{'th' if 4 <= n % 100 <= 20 else {1:'st',2:'nd',3:'rd'}.get(n%10,'th')}"
 
 
-def upload_newest_file(folder_path, dest_directory):
-    if not os.path.exists(folder_path):
-        print(f"Missing folder: {folder_path}")
-        return
+def get_latest_video_any(path):
+    """Return newest .mp4 or .mkv video."""
+    files = glob.glob(os.path.join(path, "*.mp4")) + glob.glob(
+        os.path.join(path, "*.mkv")
+    )
+    return max(files, key=os.path.getmtime) if files else None
 
     files = [
         os.path.join(folder_path, f)
@@ -89,9 +147,23 @@ def upload_newest_file(folder_path, dest_directory):
         if os.path.isfile(os.path.join(folder_path, f))
     ]
 
-    if not files:
-        print(f"No files in {folder_path}")
-        return
+def upload_newest_file(folder_path, dest_directory):
+    """Find newest file in folder and upload it to SFTP."""
+    try:
+        files = [
+            os.path.join(folder_path, f)
+            for f in os.listdir(folder_path)
+            if os.path.isfile(os.path.join(folder_path, f))
+        ]
+        if not files:
+            print(f"No files found in {folder_path} for upload.")
+            return
+        newest_file = max(files, key=os.path.getctime)
+        print(f"Uploading newest file: {newest_file}")
+        upload_file_to_sftp(local_file_path=newest_file, dest_directory=dest_directory)
+        print(f"Uploaded successfully -> {dest_directory}")
+    except Exception as e:
+        print(f"Error uploading from {folder_path}: {e}")
 
     newest = max(files, key=os.path.getctime)
 
@@ -105,6 +177,7 @@ def upload_newest_file(folder_path, dest_directory):
             time.sleep(2)
 
 
+
 def main():
 
     class DualInputDialog(simpledialog.Dialog):
@@ -114,30 +187,73 @@ def main():
 
             mapping = load_mapping()
 
-            self.player = ttk.Combobox(master, values=sorted(mapping.keys()))
-            self.player.grid(row=0, column=1)
-
-            self.game = ttk.Combobox(master, values=["valorant", "league_of_legends", "other"], state="readonly")
-            self.game.set("valorant")
-            self.game.grid(row=1, column=1)
-
-            return self.player
+            self.game_combobox = ttk.Combobox(
+                master,
+                values=["valorant", "league_of_legends", "other"],
+                state="readonly",
+            )
+            self.game_combobox.set("valorant")
+            self.game_combobox.grid(row=1, column=1)
+            return self.player_combobox
 
         def apply(self):
             self.player_name = self.player.get().strip()
             self.game_name = self.game.get().strip().lower()
 
-    # ---------------- INPUT ----------------
-    root = tk.Tk()
-    root.withdraw()
+    # Load session context if present (Electron app may write this)
+    session_context = load_session_context()
+    player_name = session_context.get("player_name")
+    game_name = session_context.get("normalized_game") or session_context.get("game")
 
-    dialog = DualInputDialog(root)
-    player_name = getattr(dialog, 'player_name', None)
-    game_name = getattr(dialog, 'game_name', None)
+    if not player_name and session_context.get("riot_id"):
+        player_name = session_context.get("riot_id", "").split("#", 1)[0]
 
-    if not player_name or not game_name:
-        print("Invalid input")
-        return
+    # If no session context was loaded (empty dict), show popup to collect details
+    popup_used = False
+    if not session_context:
+        # Show the DualInputDialog (comboboxes) to capture player_name and game_name
+        root = tk.Tk()
+        root.withdraw()
+        dialog = DualInputDialog(root, title="Enter Player & Game Info")
+        player_name = getattr(dialog, "player_name", None)
+        game_name = getattr(dialog, "game_name", None)
+
+        if not player_name or not game_name:
+            print("POPUP_CANCELLED")
+            sys.exit(2)
+
+        popup_used = True
+        print("POPUP_SHOWN")
+
+    # Load mapping early to allow a silent fallback when there is no session context.
+    mapping = load_mapping()
+
+    # If no session context, try to auto-select an existing mapped player.
+    if not player_name:
+        if mapping:
+            # Choose the player with the highest numeric P id (most recently added)
+            try:
+
+                def id_num(k):
+                    v = mapping.get(k, "P0")
+                    return int(v[1:]) if len(v) > 1 and v[1:].isdigit() else 0
+
+                player_name = max(mapping.keys(), key=id_num)
+            except Exception:
+                # fallback to the first mapping key
+                player_name = sorted(mapping.keys())[0]
+        else:
+            # No mapping exists — create an automatic player entry and use it silently
+            auto_name = f"AUTO_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            mapping[auto_name] = get_next_player_id(mapping)
+            save_mapping(mapping)
+            player_name = auto_name
+
+    # If still no game_name, default to 'other' to avoid showing GUI
+    if not game_name:
+        game_name = "other"
+
+    game_name = normalize_game_name(game_name)
 
     # ---------------- PLAYER ----------------
     mapping = load_mapping()
@@ -169,12 +285,9 @@ def main():
         if latest and not is_already_processed(latest):
             new_path = os.path.join(folder, f"{base_name}_{tag}.csv")
             os.replace(latest, new_path)
-            print(f"Renamed {tag}")
-
-    # ---------------- AUDIO ----------------
-    audio_folder = "data/audio"
-
-    latest_audio = get_latest_by_extension(audio_folder, "wav")
+            print(f"Renamed {tag}: {latest} -> {new_path}")
+        else:
+            print(f"No {tag} file found in {folder}")
 
     if latest_audio:
         new_audio = os.path.join(audio_folder, f"{base_name}.wav")
@@ -184,32 +297,29 @@ def main():
         if os.path.exists(txt):
             os.replace(txt, os.path.join(audio_folder, f"{base_name}.txt"))
 
-    # ---------------- VIDEO ----------------
-    video_src = os.path.join(os.path.expanduser("~"), "Videos")
-    video_dst = os.path.join(os.path.expanduser("~"), "Documents", "research_software", "data", "video")
-    os.makedirs(video_dst, exist_ok=True)
+    # Destination: research_software/data/video inside Documents
+    video_save_dir = os.path.join(
+        os.path.expanduser("~"), "Documents", "research_software", "data", "video"
+    )
+    os.makedirs(video_save_dir, exist_ok=True)
 
     latest_video = get_latest_video_any(video_src)
 
     if latest_video:
-        ext = os.path.splitext(latest_video)[1]
-        os.replace(latest_video, os.path.join(video_dst, f"{base_name}{ext}"))
+        ext = os.path.splitext(latest_video)[1]  # keep original extension
+        new_video_path = os.path.join(video_save_dir, f"{base_name}{ext}")
+        os.replace(latest_video, new_video_path)
+        print(f"Renamed video: {latest_video} -> {new_video_path}")
+    else:
+        print(f"No video file found in {video_source_folder}")
 
     # ---------------- UPLOAD ----------------
     time.sleep(3)
 
-    upload_newest_file('data/emotion', "/data/emotion/")
-    upload_newest_file('data/input', "/data/input/")
-    upload_newest_file('data/gaze', "/data/gaze/")
-    upload_newest_file(video_dst, "/data/video/")
-    upload_newest_file('data/eda', "/data/eda/")
-
-    # upload all audio
-    if os.path.exists(audio_folder):
-        for f in os.listdir(audio_folder):
-            full = os.path.join(audio_folder, f)
-            if os.path.isfile(full):
-                upload_file_to_sftp(full, "/data/audio/")
+    upload_newest_file("data/emotion", "/data/emotion/")
+    upload_newest_file("data/input", "/data/input/")
+    upload_newest_file("data/gaze", "/data/gaze/")
+    upload_newest_file(video_save_dir, "/data/video/")
 
 
 if __name__ == "__main__":
