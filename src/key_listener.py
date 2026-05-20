@@ -29,23 +29,13 @@ def main():
         hidden_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         try:
             # Start gaze, emotion, and input logging scripts
-            processes.append(
-                subprocess.Popen(
-                    ["poetry", "run", "python", "src/eye_tracking_script.py"],
-                    creationflags=hidden_flags,
-                )
-            )
-            processes.append(
-                subprocess.Popen(
-                    ["poetry", "run", "python", "src/Emotion_gaze_visualization.py"],
-                    creationflags=hidden_flags,
-                )
-            )
-            processes.append(
-                subprocess.Popen(
-                    ["poetry", "run", "python", "src/keyboard_recording.py"],
-                )
-            )
+            processes.append(subprocess.Popen(["poetry", "run", "python", "src/eye_tracking_script.py"]))
+            processes.append(subprocess.Popen(["poetry", "run", "python", "src/Emotion_gaze_visualization.py"]))
+            processes.append(subprocess.Popen(["poetry", "run", "python", "src/keyboard_recording.py"]))
+            processes.append(subprocess.Popen(["poetry", "run", "python", "src/microphone_recording.py"]))
+
+            time.sleep(2)
+            processes.append(subprocess.Popen(["poetry", "run", "python", "src/nuanic_eda.py"]))
 
             print("Waiting for F12 to stop and upload data...")
             keyboard.wait("f12")

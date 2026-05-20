@@ -2,11 +2,10 @@ import os
 import glob
 import datetime
 import tkinter as tk
-from tkinter import simpledialog
+from tkinter import simpledialog, ttk
 import json
 import sys
 import time
-from tkinter import ttk
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from sftp_upload import upload_file_to_sftp
@@ -15,8 +14,17 @@ from sftp_upload import upload_file_to_sftp
 
 
 def get_latest_file(path):
-    """Return the most recently modified CSV file in the given directory."""
     files = glob.glob(os.path.join(path, "*.csv"))
+    return max(files, key=os.path.getmtime) if files else None
+
+
+def get_latest_by_extension(path, extension):
+    files = glob.glob(os.path.join(path, f"*.{extension}"))
+    return max(files, key=os.path.getmtime) if files else None
+
+
+def get_latest_video_any(path):
+    files = glob.glob(os.path.join(path, "*.mp4")) + glob.glob(os.path.join(path, "*.mkv"))
     return max(files, key=os.path.getmtime) if files else None
 
 
@@ -101,7 +109,6 @@ def load_daily_game_count(count_file="data/json/date_game_count.json"):
             with open(count_file, "r") as file:
                 return json.load(file)
         except json.JSONDecodeError:
-            print("Warning: corrupted daily count file → reinitializing.")
             return {}
     return {}
 
@@ -114,14 +121,13 @@ def save_daily_game_count(data, count_file="data/json/date_game_count.json"):
 
 def update_daily_game_count(game_name, count_file="data/json/date_game_count.json"):
     today = datetime.datetime.now().strftime("%d-%m-%Y")
-    data = load_daily_game_count(count_file)
+    data = load_daily_game_count()
 
     data.setdefault(today, {})
     data[today][game_name] = data[today].get(game_name, 0) + 1
-    count = data[today][game_name]
 
     save_daily_game_count(data)
-    return get_ordinal(count), today
+    return get_ordinal(data[today][game_name]), today
 
 
 def get_ordinal(n):
@@ -135,6 +141,11 @@ def get_latest_video_any(path):
     )
     return max(files, key=os.path.getmtime) if files else None
 
+    files = [
+        os.path.join(folder_path, f)
+        for f in os.listdir(folder_path)
+        if os.path.isfile(os.path.join(folder_path, f))
+    ]
 
 def upload_newest_file(folder_path, dest_directory):
     """Find newest file in folder and upload it to SFTP."""
@@ -154,21 +165,27 @@ def upload_newest_file(folder_path, dest_directory):
     except Exception as e:
         print(f"Error uploading from {folder_path}: {e}")
 
+    newest = max(files, key=os.path.getctime)
 
-# ------------------ MAIN PROGRAM ------------------
+    for i in range(3):
+        try:
+            print(f"Uploading: {newest}")
+            upload_file_to_sftp(newest, dest_directory)
+            return
+        except Exception as e:
+            print(f"Retry {i+1} failed: {e}")
+            time.sleep(2)
+
 
 
 def main():
-    """Rename and upload latest gaze/input/emotion/video files."""
 
     class DualInputDialog(simpledialog.Dialog):
         def body(self, master):
-            tk.Label(master, text="In-game name:").grid(row=0, column=0, sticky="e")
-            tk.Label(master, text="Game:").grid(row=1, column=0, sticky="e")
+            tk.Label(master, text="In-game name:").grid(row=0, column=0)
+            tk.Label(master, text="Game:").grid(row=1, column=0)
 
             mapping = load_mapping()
-            self.player_combobox = ttk.Combobox(master, values=sorted(mapping.keys()))
-            self.player_combobox.grid(row=0, column=1)
 
             self.game_combobox = ttk.Combobox(
                 master,
@@ -180,8 +197,8 @@ def main():
             return self.player_combobox
 
         def apply(self):
-            self.player_name = self.player_combobox.get().strip()
-            self.game_name = self.game_combobox.get().strip().lower()
+            self.player_name = self.player.get().strip()
+            self.game_name = self.game.get().strip().lower()
 
     # Load session context if present (Electron app may write this)
     session_context = load_session_context()
@@ -238,37 +255,47 @@ def main():
 
     game_name = normalize_game_name(game_name)
 
-    # Assign player ID
+    # ---------------- PLAYER ----------------
     mapping = load_mapping()
+
     if player_name not in mapping:
         mapping[player_name] = get_next_player_id(mapping)
         save_mapping(mapping)
 
     player_id = mapping[player_name]
 
-    # Construct filename pattern
     ordinal, today = update_daily_game_count(game_name)
     now = datetime.datetime.now().strftime("%H-%M-%S")
+
     base_name = f"{ordinal}_game_{player_id}_{game_name}_{today}_{now}"
 
-    # ------------------ Handle CSV files ------------------
+    def is_already_processed(filepath):
+        return "_game_" in os.path.basename(filepath)
+
+    # ---------------- CSV ----------------
     for folder, tag in {
         "data/input": "input",
         "data/gaze": "gaze",
         "data/emotion": "emotion",
+        "data/eda" : "eda",
     }.items():
+
         latest = get_latest_file(folder)
-        if latest:
+
+        if latest and not is_already_processed(latest):
             new_path = os.path.join(folder, f"{base_name}_{tag}.csv")
             os.replace(latest, new_path)
             print(f"Renamed {tag}: {latest} -> {new_path}")
         else:
             print(f"No {tag} file found in {folder}")
 
-    # ------------------ Handle Video ------------------
+    if latest_audio:
+        new_audio = os.path.join(audio_folder, f"{base_name}.wav")
+        os.replace(latest_audio, new_audio)
 
-    # Source: current Windows user's Videos folder
-    video_source_folder = os.path.join(os.path.expanduser("~"), "Videos")
+        txt = latest_audio.replace(".wav", ".txt")
+        if os.path.exists(txt):
+            os.replace(txt, os.path.join(audio_folder, f"{base_name}.txt"))
 
     # Destination: research_software/data/video inside Documents
     video_save_dir = os.path.join(
@@ -276,7 +303,7 @@ def main():
     )
     os.makedirs(video_save_dir, exist_ok=True)
 
-    latest_video = get_latest_video_any(video_source_folder)
+    latest_video = get_latest_video_any(video_src)
 
     if latest_video:
         ext = os.path.splitext(latest_video)[1]  # keep original extension
@@ -286,9 +313,8 @@ def main():
     else:
         print(f"No video file found in {video_source_folder}")
 
-    # ------------------ Upload Files ------------------
-    print("Waiting 5 seconds before uploading...")
-    time.sleep(5)
+    # ---------------- UPLOAD ----------------
+    time.sleep(3)
 
     upload_newest_file("data/emotion", "/data/emotion/")
     upload_newest_file("data/input", "/data/input/")

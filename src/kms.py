@@ -11,19 +11,18 @@ import time
 from datetime import datetime
 import threading
 
+# Read shared Unix start time
+with open("data/start_unix_time.txt", "r") as f:
+    start_unix_time = int(f.read())
+
+print(f"[Emotion] Using Shared Start Time: {start_unix_time}")
+
 # Paths and constants
 openface_executable = 'OpenFace_2.2.0_win_x64/FeatureExtraction.exe'
 output_dir = 'output'
 os.makedirs(output_dir, exist_ok=True)
 circle_radius = 50
 outline_thickness = 3
-
-
-start_unix_time = int(time.time()*1000)
-print (f"Script started at:{start_unix_time} (Unix time: {start_unix_time})")
-
-def convert_unix_to_datetime(unix_time):
-    return datetime.fromtimestamp(unix_time)
 
 # Initialize Pygame for visualization
 pygame.init()
@@ -71,11 +70,8 @@ command = [
 process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
 def monitor_openface():
-    global start_unix_time
     for line in process.stdout:
         if "Starting tracking" in line:
-            start_unix_time = int(time.time()*1000)
-            print(f"Tracking started at: {start_unix_time}")
             break
 
 monitor_thread = threading.Thread(target=monitor_openface)
@@ -134,19 +130,14 @@ def save_emotion_data():
 
     df['emotion'] = df.apply(map_emotion, axis=1)
 
-    if 'timestamp' in df.columns:
-        df['unix_time'] = df['timestamp'].apply(lambda x: int(start_unix_time + x * 1000))
-        df['datetime'] = df['unix_time'].apply(lambda  x: datetime.fromtimestamp(x / 1000.0))
-    else:
-        print("Warning: 'timestamp' column not found in emotion data. UNIX time not assigned.")
-        df['unix_time'] = None
-        df['datetime'] = None
+    num_rows = len(df)
+    df['unix_time'] = [start_unix_time + i for i in range(num_rows)]
+    df['timestamp'] = pd.to_datetime(df['unix_time'], unit='s')
 
-    df = df[['datetime', 'unix_time', 'emotion', 'confidence']]
+    df = df[['timestamp', 'unix_time', 'emotion']]
     save_file_path = os.path.join('data/emotion', f'emotion_data_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.csv')
     os.makedirs('data/emotion', exist_ok=True)
     df.to_csv(save_file_path, index=False)
-    print(f"Saved emotion data with timestamps to {save_file_path}")
 
 def stop_recording():
     """
@@ -182,21 +173,21 @@ emotion_colors = {
 }
 
 # Emotion update interval
-emotion_update_interval = 0.5  
+emotion_update_interval = 0.5  # Check for new emotion data every 1 second
 last_emotion_check_time = time.time()
 
 # Visualization loop
 try:
-    emotion = 'Neutral'  
+    emotion = 'Neutral'  # Initialize emotion variable
     while True:
         pygame.event.pump()
 
         # Process events (important to close the window correctly)
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                stop_recording()  
-                pygame.quit()  
-                sys.exit()  
+                stop_recording()  # Ensure recording stops
+                pygame.quit()  # Close the Pygame window
+                sys.exit()  # Exit the program
 
         # Clear screen
         window.fill((0, 0, 0))
@@ -205,17 +196,17 @@ try:
         pygame.draw.circle(window, (255, 255, 255), (int(smoothed_x), int(smoothed_y)), circle_radius, outline_thickness)
 
         # Draw colored rectangle around the detected emotion
-        rect_color = emotion_colors.get(emotion, (255, 255, 255))  
-        pygame.draw.rect(window, rect_color, (10, 1400, 280, 32), 0)  
+        rect_color = emotion_colors.get(emotion, (255, 255, 255))  # Default to white if unknown
+        pygame.draw.rect(window, rect_color, (10, 1400, 280, 32), 0)  # Draw rectangle for emotion
         font = pygame.font.SysFont('Arial', 30)
-        text_surface = font.render(f'Emotion: {emotion}', True, (0, 0, 0)) 
-        window.blit(text_surface, (20, 1400))  
+        text_surface = font.render(f'Emotion: {emotion}', True, (0, 0, 0))  # Black text
+        window.blit(text_surface, (20, 1400))  # Adjust text position
 
         # Update display
         pygame.display.flip()
 
         # Control frame rate
-        clock.tick(60)  
+        clock.tick(60)  # Limit to 60 frames per second
 
         # Check for new emotion data periodically
         if time.time() - last_emotion_check_time > emotion_update_interval:
@@ -224,8 +215,8 @@ try:
                 latest_csv = max(csv_files, key=os.path.getctime)
                 df = pd.read_csv(latest_csv)
                 df.columns = df.columns.str.strip()
-                df['emotion'] = df.apply(map_emotion, axis=1)  
-                emotion = df['emotion'].iloc[-1]  
+                df['emotion'] = df.apply(map_emotion, axis=1)  # Apply emotion mapping function
+                emotion = df['emotion'].iloc[-1]  # Get the latest detected emotion
             last_emotion_check_time = time.time()
 
         if keyboard.is_pressed("f12"):
@@ -237,7 +228,7 @@ finally:
     dir_path = 'output'
     for filename in os.listdir(dir_path):
         file_path = os.path.join(dir_path, filename)
-        os.remove(file_path) 
+        os.remove(file_path)  # Remove the file
         print(f"Deleted file: {filename}")
-    os.rmdir(dir_path)  
+    os.rmdir(dir_path)  # Remove the directory
     print("Gaze and emotion overlay visualization stopped.")
