@@ -65,7 +65,7 @@ There are three ways to add it to the project folder:
 
 2. Send it to yourself via Discord or MS Teams.
 
-3. Download it from the [OpenFace GitHub releases page](https://github.com/TadasBaltrusaitis/OpenFace/releases).
+3. Download it from the [PlaySmart google drive](https://drive.google.com/drive/u/1/my-drive).
 
 Once obtained, unzip OpenFace and place the folder inside the project directory.
 

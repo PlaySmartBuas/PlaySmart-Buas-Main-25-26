@@ -64,7 +64,7 @@ def gaze_data_callback(gaze_data):
 # Start OpenFace FeatureExtraction
 command = [
     openface_executable,
-    '-device', '1',
+    '-device', '0',
     '-out_dir', output_dir,
     '-aus'
 ]
